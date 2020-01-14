@@ -23,7 +23,7 @@ def read_data(num, max_length):
     f2.close()
     return engs, frens
 
-def build_new_data(sum_num=30000, max_length=10, train=0.9, test=0.05, val=0.05):
+def build_new_data(sum_num=10000, max_length=10, train=0.9, test=0.05, val=0.05):
     engs, frens = read_data(sum_num, max_length)
     with open(ENG_DATA_PATH, 'w+', encoding='utf-8') as f:
         for eng in engs:
@@ -65,28 +65,41 @@ def build_new_data(sum_num=30000, max_length=10, train=0.9, test=0.05, val=0.05)
 def load_data(sum_num=30000, max_length=10):
     spacy_fr = spacy.load('fr_core_news_sm')
     spacy_en = spacy.load("en_core_web_sm")
-    tokenize_eng = lambda text : [tok.text for tok in spacy_en.tokenizer(text)]
+    tokenize_eng = lambda text : [tok.text for tok in spacy_en.tokenizer(text)][::-1] #TODO：为什么是反序
     tokenize_fren = lambda text : [tok.text for tok in spacy_fr.tokenizer(text)]
     build_new_data(sum_num=sum_num, max_length=max_length)
     temp_tokenizer = lambda x : x.strip().split()
 
+    # eng_field = data.Field(tokenize = tokenize_eng, 
+    #         init_token = '<sos>', 
+    #         eos_token = '<eos>', 
+    #         lower = True)
+
+    # fren_field = data.Field(tokenize = tokenize_fren, 
+    #         init_token = '<sos>', 
+    #         eos_token = '<eos>', 
+    #         lower = True)
+    
+    # train, val, test = datasets.Multi30k.splits(exts = ('.de', '.en'), 
+    #                                                 fields = (eng_field, fren_field))
+    
+    # eng_field.build_vocab(train.src, min_freq=3)
+    # fren_field.build_vocab(train.trg, min_freq=3)
+    # if True: return eng_field, fren_field, (train, val, test)
+
+
+
     eng_field = data.Field(
         tokenize=tokenize_eng,
         init_token = START_WORD, 
-        eos_token = END_WORD,
-        unk_token=UNKNOWN_WORD
+        eos_token = END_WORD
     )
     fren_field = data.Field(
         tokenize=tokenize_fren,
         init_token=START_WORD,
-        eos_token=END_WORD,
-        unk_token=UNKNOWN_WORD
+        eos_token=END_WORD
     )
 
-    # eng_field = data.Field(eos_token="<eos>",
-    #             include_lengths=True, batch_first=True)
-    # fren_field = data.Field(init_token="<sos>",
-    #             eos_token="<eos>", include_lengths=True, batch_first=True)
     # eng_field = data.Field(sequential=True, # 序列化数据
     #                     use_vocab=True, # 确认使用词典
     #                     init_token=START_WORD,
@@ -118,11 +131,9 @@ def load_data(sum_num=30000, max_length=10):
     print('len(train.examples)',len(train.examples))
     print('len(val.examples)',len(val.examples))
     print('len(test.examples)',len(test.examples))
-    eng_field.build_vocab(train.src)
-    fren_field.build_vocab(train.trg)
+    eng_field.build_vocab(train.src, min_freq=2)
+    fren_field.build_vocab(train.trg, min_freq=2)
     print(len(eng_field.vocab), len(fren_field.vocab))
     return eng_field, fren_field, (train, val, test)
 
-eng_field, fren_field, (train, val, test) = load_data()
-
-
+# eng_field, fren_field, (train, val, test) = load_data()

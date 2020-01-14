@@ -11,3 +11,5 @@ ENG_TEST = './data/test.en'
 FREN_TRAIN = './data/train.fr'
 FREN_VAL = './data/val.fr'
 FREN_TEST = './data/test.fr'
+
+MODEL_PATH = './model/temp.pt'
