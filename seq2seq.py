@@ -11,11 +11,13 @@ from torchtext.vocab import FastText
 from utils import load_data
 from config import MODEL_PATH
 import os
+import random
 
 class Seq2Seq(nn.Module):
     def __init__(self,
                  source_field,
                  target_field,
+                 device,
                  embedding_dim=128,
                  use_gpu=False,
                  layers=4, 
@@ -23,9 +25,12 @@ class Seq2Seq(nn.Module):
                  dropout=0.2
                  ):
         super(Seq2Seq, self).__init__()
+        self.src_field = source_field
+        self.trg_field = target_field
         self.source_embdding = nn.Embedding(len(source_field.vocab), embedding_dim)
         self.target_embedding = nn.Embedding(len(target_field.vocab), embedding_dim)
 
+        self.device = device
         self.encoder = nn.LSTM(
             embedding_dim, # 词嵌入维度
             hidden_size, # 隐藏状态维度
@@ -41,14 +46,38 @@ class Seq2Seq(nn.Module):
         self.fc = nn.Linear(hidden_size, len(target_field.vocab)) #输出维度是目标语言词典大小， 映射成one-hot vector
         # self.softmax = nn.LogSoftmax(dim=1)
 
-    def forward(self, src, trg):
+    def forward(self, src, trg, teacher_force_ratio=0.5):
         src_emb = self.source_embdding(src)
         enc_out, (enc_hidden, enc_cell) = self.encoder(src_emb)  # 默认初始化输入的hidden state是全零的，除非初始化过参数
-        trg_emb = self.target_embedding(trg)
-        dec_out, (dec_hidden, dec_cell) = self.decoder(trg_emb, (enc_hidden, enc_cell))
+        
+        # 如果用了batch first batch_size 和 trg_len 就需要互换
+        batch_size = trg.shape[1]
+        trg_len = trg.shape[0]
+        trg_vocab_size = len(self.trg_field.vocab)
 
-        pred = self.fc(dec_out)
-        return pred
+        # 定义和trg一样大的张量来存放输出
+        outputs = torch.zeros(trg_len, batch_size, trg_vocab_size).to(self.device)
+
+        # 先定义第一个输入（其实就是trg的第一个——<sos>），然后按照teacher_force_ratio 随机采用目标做输入
+        temp_input = trg[0, : ].unsqueeze(0) #TODO 理解维度
+        temp_hidden = enc_hidden
+        temp_cell = enc_cell
+        for i in range(1, trg_len):
+            temp_embeding = self.target_embedding(temp_input)
+            temp_output, (temp_hidden, temp_cell) = self.decoder(temp_embeding, (temp_hidden, temp_cell))
+            temp_pred = self.fc(temp_output.squeeze(0))
+            outputs[i] = temp_pred
+            teacher_force = random.random() < teacher_force_ratio
+            top1 = temp_pred.argmax(1)
+            temp_input = trg[i, :] if teacher_force else top1
+            temp_input = temp_input.unsqueeze(0)
+        return outputs
+        
+        # trg_emb = self.target_embedding(trg)
+        # dec_out, (dec_hidden, dec_cell) = self.decoder(trg_emb, (enc_hidden, enc_cell))
+
+        # pred = self.fc(dec_out)
+        # return pred
 
     # 初始化参数
     def init_weights(self):
@@ -64,12 +93,12 @@ def train_step(model, iterator, optimizer, criterion, CLIP):
         trg = batch.trg
         optimizer.zero_grad()
         output = model(src, trg)
-        output = output[1:].view(-1, output.shape[-1])  #TODO
-        trg = trg[1:].view(-1)
+        output = output[1:].view(-1, output.shape[-1])  #展成行向量 去除第一个输出
+        trg = trg[1:].view(-1) # 去除第一个<SOS>
         loss = criterion(output, trg)
         loss.backward()
-        clip_grad_norm(model.parameters(), max_norm=1)
-        optimizer.step()
+        clip_grad_norm(model.parameters(), max_norm=1) # 防止计算的梯度产生梯度爆炸
+        optimizer.step() # 优化器更新参数
         epoch_loss += loss.item()
         if i % 100 == 0:
             print('batch {0}'.format(i))
@@ -91,30 +120,33 @@ def eval(model, iterator, criterion):
             epoch_loss += loss.item()
     return epoch_loss / len(iterator)
 
-def test_method(model, iterator, src_field, trg_field, batch_size):
+def test_method(model, examples_iterator, src_field, trg_field):
     print('start to test')
+    count = 0
     model.eval()
     with torch.no_grad():
-        for i, batch in enumerate(iterator):
+        for i, batch in enumerate(examples_iterator):
             src = batch.src
             trg = batch.trg
-            pred = model(src, trg)
+            pred = model(src, trg, 0)
             src_tensor = batch.src.transpose(0, 1)
             trg_tensor = batch.trg.transpose(0, 1)
             pred_tensor = pred.topk(1)[1].data.transpose(0, 1)
-            for j in range(batch_size):
-                src_sent = src_tensor[j]
-                trg_sent = trg_tensor[j]
-                pred_sent = pred_tensor[j]
-                print('source sentence:', ' '.join([src_field.vocab.itos[num] for num in src_sent.data][::-1][1:-1]))
-                print('target sentence:', ' '.join([trg_field.vocab.itos[num] for num in trg_sent.data][1:-1]))
-                print('predicted sentence:', ' '.join([trg_field.vocab.itos[num] for num in pred_sent.data][1:-1]))
-                print()
+            src_sent = src_tensor[0]
+            trg_sent = trg_tensor[0]
+            pred_sent = pred_tensor[0]
+            print('source sentence:', ' '.join([src_field.vocab.itos[num] for num in src_sent.data][::-1]))
+            print('target sentence:', ' '.join([trg_field.vocab.itos[num] for num in trg_sent.data]))
+            print('predicted sentence:', ' '.join([trg_field.vocab.itos[num] for num in pred_sent.data]))
+            print()
+            count += 1
+            if count > 200:
+                break
             
 
 def train(device, epoch=10, batch_size=64):
     eng_field, fren_field, (train, val, test) = load_data()
-    model = Seq2Seq(eng_field, fren_field)
+    model = Seq2Seq(eng_field, fren_field, device=device)
     if os.path.exists(MODEL_PATH):
         model.load_state_dict(torch.load(MODEL_PATH))
     else:
@@ -146,19 +178,20 @@ if __name__ == "__main__":
         torch.backends.cudnn.deterministic = True
 
     #train
-    # train(device=device)
+    train(device=device)
 
     #test
-    eng_field, fren_field, (train, val, test) = load_data()
-    model = Seq2Seq(eng_field, fren_field)
-    if os.path.exists(MODEL_PATH):
-        if not use_gpu:
-            model.load_state_dict(torch.load(MODEL_PATH, map_location='cpu'))
-        else:
-            model.load_state_dict(torch.load(MODEL_PATH, map_location='cuda'))
-    else:
-        print('no model')
-        exit(0)
-    train_iterator, val_iterator, test_iterator = data.BucketIterator.splits((train, val, test), batch_size=16, device=device)
-    test_method(model, test_iterator, eng_field, fren_field, 16)
+    # eng_field, fren_field, (train, val, test) = load_data()
+    # model = Seq2Seq(eng_field, fren_field)
+    # if os.path.exists(MODEL_PATH):
+    #     if not use_gpu:
+    #         model.load_state_dict(torch.load(MODEL_PATH, map_location='cpu'))
+    #     else:
+    #         model.load_state_dict(torch.load(MODEL_PATH, map_location='cuda'))
+    # else:
+    #     print('no model')
+    #     exit(0)
+    # # train_iterator, val_iterator, test_iterator = data.BucketIterator.splits((train, val, test), batch_size=16, device=device)
+    # examples = iter(data.BucketIterator(test, batch_size=1, train=False, shuffle=True, device=device))
+    # test_method(model, examples, eng_field, fren_field)
     
