@@ -28,7 +28,7 @@ class Seq2Seq(nn.Module):
 
         self.encoder = nn.LSTM(
             embedding_dim, # 词嵌入维度
-            hidden_size, # 隐藏状态特征数？有待考察
+            hidden_size, # 隐藏状态维度
             num_layers=layers, # 层数
             dropout=dropout
         )
@@ -38,7 +38,7 @@ class Seq2Seq(nn.Module):
             num_layers=layers,
             dropout=dropout
         )
-        self.fc = nn.Linear(hidden_size, len(target_field.vocab)) #TODO：为什么输出维度是目标语言词典大小
+        self.fc = nn.Linear(hidden_size, len(target_field.vocab)) #输出维度是目标语言词典大小， 映射成one-hot vector
         # self.softmax = nn.LogSoftmax(dim=1)
 
     def forward(self, src, trg):
@@ -55,6 +55,7 @@ class Seq2Seq(nn.Module):
         for name, param in self.named_parameters():
             nn.init.uniform_(param.data, -0.08, 0.08) 
 
+# 单步训练
 def train_step(model, iterator, optimizer, criterion, CLIP):
     model.train()
     epoch_loss = 0
@@ -70,6 +71,8 @@ def train_step(model, iterator, optimizer, criterion, CLIP):
         clip_grad_norm(model.parameters(), max_norm=1)
         optimizer.step()
         epoch_loss += loss.item()
+        if i % 100 == 0:
+            print('batch {0}'.format(i))
     return epoch_loss/len(iterator)
 
 def eval(model, iterator, criterion):
@@ -88,6 +91,26 @@ def eval(model, iterator, criterion):
             epoch_loss += loss.item()
     return epoch_loss / len(iterator)
 
+def test_method(model, iterator, src_field, trg_field, batch_size):
+    print('start to test')
+    model.eval()
+    with torch.no_grad():
+        for i, batch in enumerate(iterator):
+            src = batch.src
+            trg = batch.trg
+            pred = model(src, trg)
+            src_tensor = batch.src.transpose(0, 1)
+            trg_tensor = batch.trg.transpose(0, 1)
+            pred_tensor = pred.topk(1)[1].data.transpose(0, 1)
+            for j in range(batch_size):
+                src_sent = src_tensor[j]
+                trg_sent = trg_tensor[j]
+                pred_sent = pred_tensor[j]
+                print('source sentence:', ' '.join([src_field.vocab.itos[num] for num in src_sent.data][::-1][1:-1]))
+                print('target sentence:', ' '.join([trg_field.vocab.itos[num] for num in trg_sent.data][1:-1]))
+                print('predicted sentence:', ' '.join([trg_field.vocab.itos[num] for num in pred_sent.data][1:-1]))
+                print()
+            
 
 def train(device, epoch=10, batch_size=64):
     eng_field, fren_field, (train, val, test) = load_data()
@@ -102,10 +125,7 @@ def train(device, epoch=10, batch_size=64):
     fren_idx = fren_field.vocab[fren_field.pad_token]
     criterion = nn.CrossEntropyLoss(ignore_index=fren_idx)
 
-    train_iterator, val_iterator, test_iterator = data.BucketIterator.splits(
-    (train, val, test), 
-    batch_size=batch_size,
-    device=device)
+    train_iterator, val_iterator, test_iterator = data.BucketIterator.splits((train, val, test), batch_size=batch_size, device=device)
     print('start to train!!!')
     best_loss = float('inf')
     for ep in range(epoch):
@@ -118,7 +138,27 @@ def train(device, epoch=10, batch_size=64):
         print('epoch {0}'.format(ep))
         print('train loss {0}'.format(train_loss))
         print('val loss {0}\n'.format(val_loss))
+
 if __name__ == "__main__":
     use_gpu=False
     device = torch.device('cuda' if torch.cuda.is_available() and use_gpu else 'cpu')
-    train(device=device)
+    if use_gpu:
+        torch.backends.cudnn.deterministic = True
+
+    #train
+    # train(device=device)
+
+    #test
+    eng_field, fren_field, (train, val, test) = load_data()
+    model = Seq2Seq(eng_field, fren_field)
+    if os.path.exists(MODEL_PATH):
+        if not use_gpu:
+            model.load_state_dict(torch.load(MODEL_PATH, map_location='cpu'))
+        else:
+            model.load_state_dict(torch.load(MODEL_PATH, map_location='cuda'))
+    else:
+        print('no model')
+        exit(0)
+    train_iterator, val_iterator, test_iterator = data.BucketIterator.splits((train, val, test), batch_size=16, device=device)
+    test_method(model, test_iterator, eng_field, fren_field, 16)
+    

@@ -133,7 +133,14 @@ def load_data(sum_num=30000, max_length=10):
     print('len(test.examples)',len(test.examples))
     eng_field.build_vocab(train.src, min_freq=2)
     fren_field.build_vocab(train.trg, min_freq=2)
-    print(len(eng_field.vocab), len(fren_field.vocab))
+    print('len(src_field.vocab)', len(eng_field.vocab))
+    print('len(trg_field.vocab)', len(fren_field.vocab))
     return eng_field, fren_field, (train, val, test)
 
 # eng_field, fren_field, (train, val, test) = load_data()
+# train_iterator, val_iterator, test_iterator = data.BucketIterator.splits((train, val, test), batch_size=16)
+# for i, batch in enumerate(train_iterator):
+#     print(batch.src.transpose(0, 1))
+#     print(batch.trg.transpose(0, 1))
+#     break
+
